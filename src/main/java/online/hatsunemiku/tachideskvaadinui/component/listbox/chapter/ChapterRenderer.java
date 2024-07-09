@@ -19,15 +19,20 @@ import com.vaadin.flow.router.RouteParam;
 import com.vaadin.flow.router.RouteParameters;
 import java.text.SimpleDateFormat;
 import java.util.Date;
-import java.util.concurrent.CompletableFuture;
 import lombok.extern.slf4j.Slf4j;
 import online.hatsunemiku.tachideskvaadinui.component.listbox.chapter.event.ChapterReadStatusChangeEvent;
+import online.hatsunemiku.tachideskvaadinui.component.listbox.chapter.event.ChapterReadSyncEvent;
 import online.hatsunemiku.tachideskvaadinui.data.tachidesk.Chapter;
 import online.hatsunemiku.tachideskvaadinui.services.MangaService;
+import online.hatsunemiku.tachideskvaadinui.view.MangaView;
 import online.hatsunemiku.tachideskvaadinui.view.MangaView.DownloadAllChapterEvent;
 import online.hatsunemiku.tachideskvaadinui.view.ReadingView;
 import org.jetbrains.annotations.NotNull;
 
+/**
+ * Renders a {@link Chapter} as a {@link HorizontalLayout} component for use in a list box. This is
+ * used for the chapter list in the {@link MangaView}.
+ */
 @Slf4j
 public class ChapterRenderer extends ComponentRenderer<HorizontalLayout, Chapter> {
 
@@ -35,6 +40,13 @@ public class ChapterRenderer extends ComponentRenderer<HorizontalLayout, Chapter
     super(chapter -> createPresentation(chapter, mangaService));
   }
 
+  /**
+   * Creates the presentation of a chapter in a list box.
+   *
+   * @param chapter The chapter to render
+   * @param mangaService The manga service to use for setting the chapter read status
+   * @return The presentation of the chapter as a {@link HorizontalLayout}
+   */
   private static HorizontalLayout createPresentation(Chapter chapter, MangaService mangaService) {
     HorizontalLayout container = new HorizontalLayout();
     container.addClassName("chapter-list-box-item");
@@ -43,7 +55,13 @@ public class ChapterRenderer extends ComponentRenderer<HorizontalLayout, Chapter
     container.add(background);
 
     Div title = new Div();
-    title.setText("Chapter " + chapter.getChapterNumber());
+
+    if (chapter.getChapterNumber() == (int) chapter.getChapterNumber()) {
+      title.setText("Chapter " + (int) chapter.getChapterNumber());
+    } else {
+      title.setText("Chapter " + chapter.getChapterNumber());
+    }
+
     title.setClassName("chapter-list-box-item-title");
 
     long dateLong = chapter.getUploadDate();
@@ -91,6 +109,26 @@ public class ChapterRenderer extends ComponentRenderer<HorizontalLayout, Chapter
           }
         });
 
+    var ui = container.getUI().orElse(UI.getCurrent());
+
+    ComponentUtil.addListener(
+        ui,
+        ChapterReadSyncEvent.class,
+        e -> {
+          if (e.getChapterNumbers().contains(chapter.getChapterNumber())) {
+            addReadStatus(container);
+            var readBtn =
+                rightSide
+                    .getChildren()
+                    .filter(btn -> btn instanceof Button)
+                    .filter(btn -> btn.getId().orElse("").equals("read-button"))
+                    .findFirst()
+                    .orElseThrow();
+
+            rightSide.replace(readBtn, getUnreadButton(chapter, mangaService, rightSide));
+          }
+        });
+
     return container;
   }
 
@@ -100,8 +138,7 @@ public class ChapterRenderer extends ComponentRenderer<HorizontalLayout, Chapter
       Button deleteBtn = new Button(VaadinIcon.TRASH.create());
       deleteBtn.addClickListener(
           e -> {
-            var success =
-                mangaService.deleteSingleChapter(chapter.getMangaId(), chapter.getIndex());
+            var success = mangaService.deleteSingleChapter(chapter.getId());
 
             Notification notification;
 
@@ -125,8 +162,7 @@ public class ChapterRenderer extends ComponentRenderer<HorizontalLayout, Chapter
       Button downloadBtn = new Button(VaadinIcon.DOWNLOAD.create());
       downloadBtn.addClickListener(
           e -> {
-            var success =
-                mangaService.downloadSingleChapter(chapter.getMangaId(), chapter.getIndex());
+            var success = mangaService.downloadSingleChapter(chapter.getId());
 
             Notification notification;
 
@@ -166,45 +202,20 @@ public class ChapterRenderer extends ComponentRenderer<HorizontalLayout, Chapter
 
   private static void trackChapterDownload(
       Chapter chapter, MangaService mangaService, Div rightSide, UI ui, Button downloadBtn) {
-    CompletableFuture<?> future =
-        CompletableFuture.runAsync(
-            () -> {
-              while (true) {
+    mangaService.addDownloadTrackListener(
+        chapter.getId(),
+        () -> {
+          if (!ui.isAttached()) {
+            return;
+          }
 
-                if (Thread.currentThread().isInterrupted()) {
-                  break;
-                }
-
-                var tempChapter = mangaService.getChapter(chapter.getMangaId(), chapter.getIndex());
-
-                if (!tempChapter.isDownloaded()) {
-                  try {
-                    Thread.sleep(1000);
-                  } catch (InterruptedException interruptedException) {
-                    log.debug(
-                        "Download Tracker thread stopping for ChapterID: {}", chapter.getId());
-                    break;
-                  }
-                  continue;
-                }
-
-                ui.access(
-                    () -> {
-                      Chapter chapterCopy = chapter.withDownloaded(true);
-                      Button deleteBtn = getDownloadBtn(chapterCopy, mangaService, rightSide);
-                      rightSide.replace(downloadBtn, deleteBtn);
-                    });
-                break;
-              }
-            });
-
-    future.exceptionally(
-        throwable -> {
-          log.error("Failed to track chapter download", throwable);
-          return null;
+          ui.access(
+              () -> {
+                Chapter chapterCopy = chapter.withDownloaded(true);
+                Button deleteBtn = getDownloadBtn(chapterCopy, mangaService, rightSide);
+                rightSide.replace(downloadBtn, deleteBtn);
+              });
         });
-
-    ui.addDetachListener(detachEvent -> future.cancel(true));
   }
 
   @NotNull
@@ -215,16 +226,9 @@ public class ChapterRenderer extends ComponentRenderer<HorizontalLayout, Chapter
           int mangaId = chapter.getMangaId();
 
           RouteParam mangaIdParam = new RouteParam("mangaId", String.valueOf(mangaId));
+          RouteParam chapterIdParam = new RouteParam("chapterId", String.valueOf(chapter.getId()));
 
-          double chapterNumber = chapter.getIndex();
-          RouteParam chapterIndexParam;
-          if (chapterNumber % 1 == 0) {
-            chapterIndexParam = new RouteParam("chapterIndex", String.valueOf((int) chapterNumber));
-          } else {
-            chapterIndexParam = new RouteParam("chapterIndex", String.valueOf(chapterNumber));
-          }
-
-          RouteParameters params = new RouteParameters(mangaIdParam, chapterIndexParam);
+          RouteParameters params = new RouteParameters(mangaIdParam, chapterIdParam);
 
           UI.getCurrent().navigate(ReadingView.class, params);
         });
@@ -232,11 +236,20 @@ public class ChapterRenderer extends ComponentRenderer<HorizontalLayout, Chapter
     return background;
   }
 
+  /**
+   * Creates a read button for the given chapter.
+   *
+   * @param chapter The chapter to create the read button for
+   * @param mangaService The manga service to use for setting the chapter read
+   * @param rightSide The right side div the button is in for replacement
+   * @return The read {@link Button button}
+   */
   private static Button getReadButton(Chapter chapter, MangaService mangaService, Div rightSide) {
     Button readButton = new Button(VaadinIcon.EYE.create());
+    readButton.setId("read-button");
     readButton.addClickListener(
         e -> {
-          if (!mangaService.setChapterRead(chapter.getMangaId(), chapter.getIndex())) {
+          if (!mangaService.setChapterRead(chapter.getId(), chapter.getMangaId())) {
             log.error("Failed to set chapter read");
             Notification notification = new Notification("Failed to set chapter read", 5000);
             notification.setPosition(Notification.Position.MIDDLE);
@@ -255,11 +268,20 @@ public class ChapterRenderer extends ComponentRenderer<HorizontalLayout, Chapter
     return readButton;
   }
 
+  /**
+   * Creates an unread button for the given chapter.
+   *
+   * @param chapter The chapter to create the unread button for
+   * @param mangaService The manga service to use for setting the chapter unread
+   * @param rightSide The right side div the button is in for replacement
+   * @return The unread {@link Button button}
+   */
   private static Button getUnreadButton(Chapter chapter, MangaService mangaService, Div rightSide) {
     Button unreadButton = new Button(VaadinIcon.EYE_SLASH.create());
+    unreadButton.setId("unread-button");
     unreadButton.addClickListener(
         e -> {
-          if (!mangaService.setChapterUnread(chapter.getMangaId(), chapter.getIndex())) {
+          if (!mangaService.setChapterUnread(chapter.getId())) {
             log.error("Failed to set chapter unread");
             Notification notification = new Notification("Failed to set chapter unread", 5000);
             notification.setPosition(Notification.Position.MIDDLE);

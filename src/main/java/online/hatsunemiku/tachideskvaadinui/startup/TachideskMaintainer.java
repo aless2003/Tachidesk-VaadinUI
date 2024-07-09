@@ -10,6 +10,8 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLConnection;
 import java.nio.channels.Channels;
@@ -24,38 +26,85 @@ import online.hatsunemiku.tachideskvaadinui.data.settings.event.UrlChangeEvent;
 import online.hatsunemiku.tachideskvaadinui.services.SettingsService;
 import online.hatsunemiku.tachideskvaadinui.startup.download.ReadableProgressByteChannel;
 import online.hatsunemiku.tachideskvaadinui.utils.PathUtils;
+import online.hatsunemiku.tachideskvaadinui.utils.ProfileUtils;
 import online.hatsunemiku.tachideskvaadinui.utils.SerializationUtils;
 import online.hatsunemiku.tachideskvaadinui.utils.TachideskUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.core.env.Environment;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
+/**
+ * This class is responsible for keeping the Tachidesk/Suwayomi Server up to date and running. It
+ * checks for updates and downloads them if necessary.
+ */
 @Component
 @Slf4j
 public class TachideskMaintainer {
 
   private static final Logger logger = LoggerFactory.getLogger(TachideskMaintainer.class);
+  private static File serverDir;
   private final RestTemplate client;
   private final TachideskStarter starter;
   private final SettingsService settingsService;
-  private static final File serverDir = new File("server");
-  private final File projectDir = PathUtils.getProjectDir().toFile();
+  private final File projectDir;
   @Getter private boolean updating = false;
   @Getter private double progress = 0;
 
   public TachideskMaintainer(
-      RestTemplate client, TachideskStarter starter, SettingsService settingsService) {
+      RestTemplate client,
+      TachideskStarter starter,
+      SettingsService settingsService,
+      Environment env) {
     this.client = client;
     this.starter = starter;
     this.settingsService = settingsService;
+
+    if (ProfileUtils.isDev(env)) {
+      projectDir = PathUtils.getDevDir().toFile();
+    } else {
+      projectDir = PathUtils.getProjectDir().toFile();
+    }
+
+    serverDir = new File(projectDir, "server");
   }
 
+  /**
+   * Deletes the old server file.
+   *
+   * @param oldServer The {@link Meta} object representing the old server.
+   */
+  private static void deleteOldServerFile(Meta oldServer) {
+
+    if (oldServer.getJarLocation().isEmpty()) {
+      return;
+    }
+
+    File oldServerFile = new File(serverDir, oldServer.getJarName());
+
+    if (!oldServerFile.exists()) {
+      return;
+    }
+
+    if (oldServerFile.delete()) {
+      return;
+    }
+
+    logger.info("Failed to delete old version");
+    oldServerFile.deleteOnExit();
+  }
+
+  /**
+   * This method is triggered when the application is ready or when the URL changes. It is
+   * responsible for starting the Suwayomi server, checking for updates, and applying them if
+   * necessary. It's being run asynchronously to avoid blocking the main thread.
+   */
   @EventListener({ApplicationReadyEvent.class, UrlChangeEvent.class})
   @Async
   public void start() {
@@ -129,7 +178,9 @@ public class TachideskMaintainer {
 
     starter.stopJar();
 
-    deleteOldServerFile(oldServer);
+    if (!oldServer.getJarName().equals(newServerMeta.getJarName())) {
+      deleteOldServerFile(oldServer);
+    }
 
     oldServer.setJarName(newServerMeta.getJarName());
     oldServer.setJarVersion(newServerMeta.getJarVersion());
@@ -190,29 +241,24 @@ public class TachideskMaintainer {
     }
   }
 
-  private static void deleteOldServerFile(Meta oldServer) {
-
-    if (!oldServer.getJarLocation().isEmpty()) {
-      return;
-    }
-
-    File oldServerFile = new File(serverDir, oldServer.getJarName());
-
-    if (!oldServerFile.exists()) {
-      return;
-    }
-
-    if (oldServerFile.delete()) {
-      return;
-    }
-
-    logger.info("Failed to delete old version");
-    oldServerFile.deleteOnExit();
-  }
-
+  /**
+   * This method is used to download the server file from a given URL.
+   *
+   * @param jarUrl The URL of the jar file to download.
+   * @param serverFile The file to write the downloaded content to.
+   * @throws IOException If an I/O error occurs.
+   */
   private void downloadServerFile(String jarUrl, File serverFile) throws IOException {
     updating = true;
-    URL url = new URL(jarUrl);
+
+    URL url;
+
+    try {
+      url = new URI(jarUrl).toURL();
+    } catch (URISyntaxException e) {
+      log.error("Failed to create URL from URI", e);
+      throw new RuntimeException(e);
+    }
 
     URLConnection connection = url.openConnection();
     int size = connection.getContentLength();
@@ -259,7 +305,8 @@ public class TachideskMaintainer {
   }
 
   private boolean checkServer(Meta existing) {
-    File serverDir = new File("server");
+
+    var serverDir = new File(projectDir, "server");
     File serverFile = new File(serverDir, existing.getJarName());
 
     if (!serverFile.exists()) {

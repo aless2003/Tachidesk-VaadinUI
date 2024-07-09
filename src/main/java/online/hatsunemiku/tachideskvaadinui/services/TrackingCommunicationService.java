@@ -7,6 +7,7 @@
 package online.hatsunemiku.tachideskvaadinui.services;
 
 import lombok.extern.slf4j.Slf4j;
+import online.hatsunemiku.tachideskvaadinui.services.tracker.AniListAPIService;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -34,7 +35,7 @@ public class TrackingCommunicationService {
    * @param onlyWhenBigger a flag indicating whether to update the progress only when the chapter is
    *     bigger than the current progress
    */
-  public void setChapterProgress(int mangaId, int chapter, boolean onlyWhenBigger) {
+  public void setChapterProgress(int mangaId, float chapter, boolean onlyWhenBigger) {
     var tracker = dataService.getTracker(mangaId);
 
     if (onlyWhenBigger) {

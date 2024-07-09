@@ -10,17 +10,23 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import lombok.Getter;
 import lombok.Setter;
 import online.hatsunemiku.tachideskvaadinui.data.settings.reader.ReaderSettings;
 import org.jetbrains.annotations.NotNull;
 import org.springframework.lang.NonNull;
 
+/**
+ * The Settings class is a data class used to manage the settings of the application. It contains
+ * all the settings that the user can set, such as the default reader settings, the URL of the
+ * Server, and more.
+ *
+ * @author aless2003
+ * @version 1.3.0
+ * @since 1.0.0
+ */
 public class Settings {
-
-  @NonNull
-  @JsonProperty("url")
-  private String url;
 
   @Getter
   @JsonProperty("defaultReaderSettings")
@@ -29,17 +35,45 @@ public class Settings {
   @JsonProperty("mangaReaderSettings")
   private final Map<Integer, ReaderSettings> mangaReaderSettings;
 
+  @NonNull
+  @JsonProperty("url")
+  private String url;
+
+  @Getter
+  @Setter
+  @JsonProperty("startPopup")
+  private boolean startPopup;
+
   @JsonProperty("defaultSearchLang")
   @Getter
   @Setter
   private String defaultSearchLang;
 
+  @JsonProperty("defaultSourceLang")
+  @Getter
+  @Setter
+  private String defaultSourceLang;
+
+  /**
+   * Creates a new Settings object with the given parameters.
+   *
+   * @param url The URL of the Server to connect to.
+   * @param startPopup Whether to show the popup on startup.
+   * @param defaultReaderSettings The {@link ReaderSettings} object to use.
+   * @param mangaReaderSettings A map of Manga IDs to {@link ReaderSettings} objects.
+   * @param defaultSearchLang The default search language to use.
+   * @param defaultSourceLang The default source language to use.
+   */
   @JsonCreator
   public Settings(
       @NotNull @JsonProperty("url") String url,
+      @JsonProperty("startPopup") Boolean startPopup,
       @JsonProperty("defaultReaderSettings") ReaderSettings defaultReaderSettings,
       @JsonProperty("mangaReaderSettings") Map<Integer, ReaderSettings> mangaReaderSettings,
-      @JsonProperty("defaultSearchLang") String defaultSearchLang) {
+      @JsonProperty("defaultSearchLang") String defaultSearchLang,
+      @JsonProperty("defaultSourceLang") String defaultSourceLang) {
+
+    this.startPopup = Objects.requireNonNullElse(startPopup, true);
 
     if (defaultReaderSettings == null) {
       defaultReaderSettings = new ReaderSettings();
@@ -53,21 +87,23 @@ public class Settings {
     this.defaultReaderSettings = defaultReaderSettings;
     this.mangaReaderSettings = new HashMap<>(mangaReaderSettings);
     this.defaultSearchLang = defaultSearchLang;
+    this.defaultSourceLang = defaultSourceLang;
   }
 
   public Settings(@NotNull String url) {
     this.url = url;
     this.defaultReaderSettings = new ReaderSettings();
     this.mangaReaderSettings = new HashMap<>();
-  }
-
-  public void setUrl(@NonNull String url) {
-    this.url = url;
+    this.startPopup = true;
   }
 
   @NonNull
   public String getUrl() {
     return url;
+  }
+
+  public void setUrl(@NonNull String url) {
+    this.url = url;
   }
 
   public ReaderSettings getReaderSettings(Integer mangaId) {

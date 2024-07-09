@@ -7,24 +7,27 @@
 package online.hatsunemiku.tachideskvaadinui.data.tachidesk;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.util.Objects;
 import lombok.AllArgsConstructor;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.With;
+import org.jetbrains.annotations.NotNull;
 
+/** Represents a chapter of a manga. */
 @Getter
 @NoArgsConstructor
 @AllArgsConstructor
 @With
 @EqualsAndHashCode
-public class Chapter {
+public class Chapter implements Comparable<Chapter> {
 
   @JsonProperty("pageCount")
   private int pageCount;
 
-  @JsonProperty("read")
-  private boolean read;
+  @JsonProperty("isRead")
+  private boolean isRead;
 
   @JsonProperty("mangaId")
   private int mangaId;
@@ -38,17 +41,14 @@ public class Chapter {
   @JsonProperty("chapterCount")
   private int chapterCount;
 
-  @JsonProperty("index")
-  private int index;
-
   @JsonProperty("fetchedAt")
   private int fetchedAt;
 
   @JsonProperty("chapterNumber")
-  private int chapterNumber;
+  private float chapterNumber;
 
-  @JsonProperty("downloaded")
-  private boolean downloaded;
+  @JsonProperty("isDownloaded")
+  private boolean isDownloaded;
 
   @JsonProperty("url")
   private String url;
@@ -71,8 +71,27 @@ public class Chapter {
   @JsonProperty("id")
   private int id;
 
+  @JsonProperty("manga")
+  private Manga manga;
+
   @Override
   public String toString() {
     return name;
+  }
+
+  /**
+   * Compares this chapter to another chapter based on the chapter number.
+   *
+   * @param o the object to be compared.
+   * @return a negative integer, zero, or a positive integer as this chapter is less than, equal to,
+   *     or greater than the specified chapter.
+   */
+  @Override
+  public int compareTo(@NotNull Chapter o) { // skipqc: JAVA-W1056
+    if (Objects.equals(this, o)) {
+      return 0;
+    }
+
+    return Float.compare(chapterNumber, o.chapterNumber);
   }
 }

@@ -6,23 +6,17 @@
 
 package online.hatsunemiku.tachideskvaadinui.services;
 
-import feign.FeignException;
-import java.net.URI;
-import online.hatsunemiku.tachideskvaadinui.data.settings.Settings;
-import online.hatsunemiku.tachideskvaadinui.data.tachidesk.search.SearchQueryParameters;
-import online.hatsunemiku.tachideskvaadinui.data.tachidesk.search.SearchResponse;
+import online.hatsunemiku.tachideskvaadinui.data.tachidesk.search.SourceSearchResult;
 import online.hatsunemiku.tachideskvaadinui.services.client.SearchClient;
 import org.springframework.stereotype.Service;
 
 @Service
 public class SearchService {
 
-  private final SettingsService settingsService;
   private final SearchClient searchClient;
 
-  public SearchService(SearchClient searchClient, SettingsService settingsService) {
+  public SearchService(SearchClient searchClient) {
     this.searchClient = searchClient;
-    this.settingsService = settingsService;
   }
 
   /**
@@ -32,17 +26,8 @@ public class SearchService {
    * @param sourceId The sourceId to search within.
    * @param pageNum The page number for pagination.
    * @return The search response containing the results.
-   * @throws FeignException if an error occurs during the search.
    */
-  public SearchResponse search(String query, long sourceId, int pageNum) {
-
-    Settings settings = settingsService.getSettings();
-
-    URI baseUrl = URI.create(settings.getUrl());
-
-    SearchQueryParameters searchQueryParameters =
-        SearchQueryParameters.builder().pageNum(pageNum).searchTerm(query).build();
-
-    return searchClient.search(baseUrl, sourceId, searchQueryParameters);
+  public SourceSearchResult search(String query, String sourceId, int pageNum) {
+    return searchClient.search(query, pageNum, sourceId);
   }
 }

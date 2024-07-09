@@ -6,80 +6,201 @@
 
 package online.hatsunemiku.tachideskvaadinui.services;
 
-import feign.FeignException;
-import java.net.URI;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
 import lombok.extern.slf4j.Slf4j;
-import online.hatsunemiku.tachideskvaadinui.data.settings.Settings;
 import online.hatsunemiku.tachideskvaadinui.data.tachidesk.Chapter;
 import online.hatsunemiku.tachideskvaadinui.data.tachidesk.Manga;
 import online.hatsunemiku.tachideskvaadinui.services.client.DownloadClient;
+import online.hatsunemiku.tachideskvaadinui.services.client.DownloadClient.DownloadChangeEvent;
 import online.hatsunemiku.tachideskvaadinui.services.client.MangaClient;
-import org.jetbrains.annotations.NotNull;
+import online.hatsunemiku.tachideskvaadinui.services.tracker.SuwayomiTrackingService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
+import reactor.core.Disposable;
+import reactor.core.Disposables;
+import reactor.core.publisher.Flux;
 
+/**
+ * This class is responsible for handling all operations related to manga. This includes adding and
+ * removing manga from the library, fetching chapters, downloading chapters and more.
+ */
 @Service
 @Slf4j
 public class MangaService {
 
   private final MangaClient mangaClient;
-  // I chose to use the download client here as you only really use it in combination with Manga and
-  // not on its own
   private final DownloadClient downloadClient;
-  private final SettingsService settingsService;
+  private final Flux<List<DownloadChangeEvent>> downloadChangeEventTracker;
+  private final SuwayomiTrackingService suwayomiTrackingService;
 
+  /**
+   * Creates a new MangaService.
+   *
+   * @param mangaClient the {@link MangaClient} to use for fetching manga data
+   * @param downloadCLient the {@link DownloadClient} to use for downloading chapters
+   * @param suwayomiTrackingService the {@link SuwayomiTrackingService} to use for tracking progress
+   */
   @Autowired
   public MangaService(
-      MangaClient mangaClient, DownloadClient downloadClient, SettingsService settingsService) {
+      MangaClient mangaClient,
+      DownloadClient downloadCLient,
+      SuwayomiTrackingService suwayomiTrackingService) {
     this.mangaClient = mangaClient;
-    this.downloadClient = downloadClient;
-    this.settingsService = settingsService;
+    this.downloadClient = downloadCLient;
+    this.downloadChangeEventTracker = downloadCLient.trackDownloads();
+    this.suwayomiTrackingService = suwayomiTrackingService;
   }
 
-  public void addMangaToLibrary(long mangaId) {
-    URI baseUrl = getBaseUrl();
-
-    mangaClient.addMangaToLibrary(baseUrl, mangaId);
+  /**
+   * Adds a manga to the library.
+   *
+   * @param mangaId the ID of the manga to be added
+   * @return {@code true} if the manga was successfully added to the library, {@code false}
+   *     otherwise
+   */
+  public boolean addMangaToLibrary(int mangaId) {
+    return mangaClient.addMangaToLibrary(mangaId);
   }
 
-  public void removeMangaFromLibrary(long mangaId) {
-    URI baseUrl = getBaseUrl();
-
-    mangaClient.removeMangaFromLibrary(baseUrl, mangaId);
+  /**
+   * Removes a manga from the library.
+   *
+   * @param mangaId the ID of the manga to be removed
+   * @return {@code true} if the manga was successfully removed from the library, {@code false}
+   *     otherwise
+   */
+  public boolean removeMangaFromLibrary(int mangaId) {
+    return mangaClient.removeMangaFromLibrary(mangaId);
   }
 
-  public List<Chapter> getChapterList(long mangaId) {
-    URI baseUrl = getBaseUrl();
+  /**
+   * Retrieves the cached list of chapters for a manga. This method does NOT find new chapters. Use
+   * {@link #fetchChapterList(int)} to find new chapters. This method also sorts the chapters by
+   * chapter number in ascending order.
+   *
+   * @param mangaId the ID of the manga for which to get the chapter list
+   * @return the list of Chapter objects representing the chapters of the manga
+   */
+  public List<Chapter> getChapterList(int mangaId) {
+    List<Chapter> chapters = mangaClient.getChapters(mangaId);
 
-    return mangaClient.getChapterList(baseUrl, mangaId);
+    chapters.sort(Chapter::compareTo);
+
+    return chapters;
   }
 
-  @Cacheable(value = "chapter", key = "#mangaId + #chapterIndex")
-  public Chapter getChapter(long mangaId, int chapterIndex) {
-    URI baseUrl = getBaseUrl();
+  /**
+   * Retrieves the list of chapters for a manga from the server. This method finds new chapters and
+   * updates the cache. Use {@link #getChapterList(int)} to retrieve the cached list of chapters.
+   * This method also sorts the chapters by chapter number in ascending order.
+   *
+   * @param mangaId the ID of the manga for which to get the chapter list
+   * @return the list of Chapter objects representing the chapters of the manga
+   */
+  public List<Chapter> fetchChapterList(int mangaId) {
+    List<Chapter> chapters = mangaClient.fetchChapterList(mangaId);
 
-    return mangaClient.getChapter(baseUrl, mangaId, chapterIndex);
+    chapters.sort(Chapter::compareTo);
+
+    return chapters;
   }
 
-  public boolean setChapterRead(long mangaId, int chapterIndex) {
-    URI baseUrl = getBaseUrl();
+  @Cacheable(value = "chapter", key = "#chapterId", unless = "#result.pageCount == -1")
+  public Chapter getChapter(int chapterId) {
+    return mangaClient.getChapter(chapterId);
+  }
 
+  /**
+   * Sets a chapter as read.
+   *
+   * @param chapterId the ID of the chapter to be set as read
+   * @return {@code true} if the chapter was successfully set as read, {@code false} otherwise
+   */
+  public boolean setChapterRead(int chapterId, int mangaId) {
     try {
-      mangaClient.modifyReadStatus(baseUrl, mangaId, chapterIndex, true);
+
+      boolean updated = mangaClient.setChapterRead(chapterId);
+
+      if (!updated) {
+        return false;
+      }
+
+      suwayomiTrackingService.trackProgress(mangaId);
+
       return true;
+
     } catch (Exception e) {
       return false;
     }
   }
 
-  public boolean setChapterUnread(long mangaId, int chapterIndex) {
-    URI baseUrl = getBaseUrl();
+  /**
+   * Sets all chapters of a manga as read where their chapter number is below or equal to the
+   * specified chapter number.
+   *
+   * @param chapterNumber the chapter number to set as the threshold
+   * @param mangaId the ID of the manga to set the chapters as read
+   * @return a list of chapter numbers that were successfully set as read
+   */
+  public List<Float> setChaptersBelowAndEqualRead(int chapterNumber, int mangaId) {
+    var chapters = getChapterList(mangaId);
+    Set<Float> updated = ConcurrentHashMap.newKeySet();
 
+    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+      List<Callable<Boolean>> tasks = new ArrayList<>();
+
+      for (var chapter : chapters) {
+        if (chapter.isRead()) {
+          continue;
+        }
+
+        if (chapter.getChapterNumber() <= chapterNumber) {
+          tasks.add(
+              () -> {
+                if (!setChapterRead(chapter.getId(), mangaId)) {
+                  return false;
+                }
+                updated.add(chapter.getChapterNumber());
+                return true;
+              });
+        }
+      }
+
+      var result = executor.invokeAll(tasks);
+
+      for (var future : result) {
+        if (!future.get()) {
+          log.warn("Failed to set a chapter as read");
+        }
+      }
+
+    } catch (InterruptedException e) {
+      log.error("Chapter read update interrupted", e);
+      throw new RuntimeException(e);
+    } catch (ExecutionException e) {
+      log.error("Chapter read update failed", e);
+      throw new RuntimeException(e);
+    }
+
+    return new ArrayList<>(updated);
+  }
+
+  /**
+   * Sets a chapter as unread.
+   *
+   * @param chapterId the ID of the chapter to be set as unread
+   * @return {@code true} if the chapter was successfully set as unread, {@code false} otherwise
+   */
+  public boolean setChapterUnread(int chapterId) {
     try {
-      mangaClient.modifyReadStatus(baseUrl, mangaId, chapterIndex, false);
-      return true;
+      return mangaClient.setChapterUnread(chapterId);
     } catch (Exception e) {
       return false;
     }
@@ -92,10 +213,8 @@ public class MangaService {
    * @return a Manga object containing the full data of the manga
    */
   @Cacheable(value = "manga", key = "#mangaId")
-  public Manga getMangaFull(long mangaId) {
-    URI baseUrl = getBaseUrl();
-
-    return mangaClient.getMangaFull(baseUrl, mangaId);
+  public Manga getManga(long mangaId) {
+    return mangaClient.getManga(mangaId);
   }
 
   /**
@@ -104,10 +223,8 @@ public class MangaService {
    * @param mangaId the ID of the manga to be added
    * @param categoryId the ID of the category to add the manga to
    */
-  public void addMangaToCategory(long mangaId, long categoryId) {
-    URI baseUrl = getBaseUrl();
-
-    mangaClient.addMangaToCategory(baseUrl, mangaId, categoryId);
+  public void addMangaToCategory(int mangaId, int categoryId) {
+    mangaClient.addMangaToCategories(List.of(categoryId), mangaId);
   }
 
   /**
@@ -116,50 +233,23 @@ public class MangaService {
    * @param mangaId the ID of the manga to be removed
    * @param categoryId the ID of the category to remove the manga from
    */
-  public void removeMangaFromCategory(long mangaId, long categoryId) {
-    URI baseUrl = getBaseUrl();
-
-    mangaClient.removeMangaFromCategory(baseUrl, mangaId, categoryId);
+  public void removeMangaFromCategory(int mangaId, int categoryId) {
+    mangaClient.removeMangaFromCategories(List.of(categoryId), mangaId);
   }
 
-  public void moveMangaToCategory(long mangaId, long newCategoryId, long oldCategoryId) {
+  public void moveMangaToCategory(int mangaId, int newCategoryId, int oldCategoryId) {
     addMangaToCategory(mangaId, newCategoryId);
     removeMangaFromCategory(mangaId, oldCategoryId);
   }
 
   /**
-   * Retrieves the base URL for the manga service.
+   * Downloads a single chapter with the specified chapter ID.
    *
-   * @return the base URL for the manga service
-   * @throws NullPointerException if the URL is null
+   * @param chapterId the ID of the {@link Chapter} to download
+   * @return true if the download was successful, false otherwise
    */
-  @NotNull
-  private URI getBaseUrl() {
-    Settings settings = settingsService.getSettings();
-
-    return URI.create(settings.getUrl());
-  }
-
-  /**
-   * Downloads a single chapter of a manga.
-   *
-   * @param mangaId the ID of the manga to download
-   * @param chapterIndex the index of the chapter to download
-   * @return true if downloading was queued, false otherwise
-   */
-  public boolean downloadSingleChapter(int mangaId, int chapterIndex) {
-    URI baseUrl = getBaseUrl();
-
-    try {
-      downloadClient.downloadSingleChapter(baseUrl, mangaId, chapterIndex);
-      return true;
-    } catch (FeignException e) {
-      log.debug("Failed to download chapter", e);
-      return false;
-    } catch (Exception e) {
-      log.error("Failed to download chapter", e);
-      throw new RuntimeException(e);
-    }
+  public boolean downloadSingleChapter(int chapterId) {
+    return downloadClient.downloadChapters(List.of(chapterId));
   }
 
   /**
@@ -169,41 +259,59 @@ public class MangaService {
    * @return true if downloading was queued, false otherwise
    */
   public boolean downloadMultipleChapter(List<Integer> chapterIds) {
-    URI baseUrl = getBaseUrl();
-
-    try {
-      var tempList = List.copyOf(chapterIds);
-      var request = new DownloadClient.DownloadChapterRequest(tempList);
-      downloadClient.downloadMultipleChapters(baseUrl, request);
-      return true;
-    } catch (FeignException e) {
-      log.debug("Failed to download chapter", e);
-      return false;
-    } catch (Exception e) {
-      log.error("Failed to download chapter", e);
-      throw new RuntimeException(e);
-    }
+    return downloadClient.downloadChapters(List.copyOf(chapterIds));
   }
 
   /**
-   * Deletes a single chapter of manga.
+   * Deletes a single downloaded chapter of a manga.
    *
-   * @param mangaId the ID of the manga
-   * @param chapterIndex the index of the chapter to delete
-   * @return true if deletion was successful, false otherwise
+   * @param chapterId the ID of the chapter to delete
+   * @return true if the chapter was successfully deleted, false otherwise
    */
-  public boolean deleteSingleChapter(int mangaId, int chapterIndex) {
-    URI baseUrl = getBaseUrl();
+  public boolean deleteSingleChapter(int chapterId) {
+    return downloadClient.deleteChapter(chapterId);
+  }
 
-    try {
-      downloadClient.deleteSingleChapter(baseUrl, mangaId, chapterIndex);
-      return true;
-    } catch (FeignException e) {
-      log.debug("Failed to delete chapter", e);
-      return false;
-    } catch (Exception e) {
-      log.error("Failed to delete chapter", e);
-      throw new RuntimeException(e);
-    }
+  public List<String> getChapterPages(int chapterId) {
+    return mangaClient.getChapterPages(chapterId);
+  }
+
+  /**
+   * Retrieves the list of {@link Manga} in the user's library.
+   *
+   * @return the list of manga in the library
+   */
+  public List<Manga> getLibraryManga() {
+    // TODO: make this throw a custom exception when the update fails with Cloudflare
+    return mangaClient.getLibraryManga();
+  }
+
+  /**
+   * Adds a listener to the download change event tracker.
+   *
+   * @param chapterId The id of the chapter to listen for
+   * @param callback The callback to run when the chapter is downloaded
+   */
+  public void addDownloadTrackListener(int chapterId, Runnable callback) {
+    Disposable.Composite cancellation = Disposables.composite();
+
+    var subscription =
+        downloadChangeEventTracker.subscribe(
+            events ->
+                events.forEach(
+                    event -> {
+                      if (event.chapter().id() != chapterId) {
+                        return;
+                      }
+
+                      if (event.progress() != 1) {
+                        return;
+                      }
+
+                      callback.run();
+                      cancellation.dispose();
+                    }));
+
+    cancellation.add(subscription);
   }
 }
